@@ -1,0 +1,114 @@
+Road network:
+    The length of a lane is 10000 meters.
+    When the vehicle reaches the end of the lane, it will be removed from the road network.
+    After initialization, the cars will be added to the beginning of the road.
+
+
+System configuration:
+    The system managers and the vehicles of the system share a common clock. The synchronization error of the clocks is less
+    than 10 milliseconds.
+    time_step = 0.01 # The time step of the system, seconds.
+    current_time # The current timestamp of the system, seconds.
+    preemptive_interval = 20 # preemptive interval of the clocks, seconds.
+    frozen_interval = 10 # frozen interval of the clocks, seconds
+    k = 1.00  # Safety margin threshold coefficient, k >= 1.0
+    saturation_rate = 0.6. # Saturation rate of the system: The saturation rate of the system is the possibility of adding
+    a new vehicle to the road network when there is space to add a new vehicle.
+
+    frozen time zone: (current_time, current_time + frozen_interval)
+    preemptive time zone: (current_time, current_time + preemptive_interval)
+    adjustment time zone: (current_time + frozen_interval, current_time + preemptive_interval)
+
+    The detailed motion of the vehicles is scheduled preemptively at a time interval before the current time. When conflicts occur,
+    the motion of the related vehicles will be adjusted to avoid conflicts. Only the motion in the adjustment time zone will be adjusted.
+
+The parameters of the vehicles are:
+    a_d = 1.0  # Deceleration amplitude of the following vehicles (m/s^2)
+    d = 7.1  # Static safety distance between the vehicles(m), length of the vehicle is 5 meters, add more needed space 2.1 meters.
+    a_max = 1.0  # Maximum allowed acceleration/deceleration amplitude (m/s^2)
+    v_limit = 35.0  # Road speed limit (m/s), hard limit of the road speed.
+    desired_speed = 30.0  # Desired speed of the vehicle (m/s)
+    delta_v_margin = 2.5  # Allowed speed difference (m/s) between the speed of the vehicle and the v_limit, which is the
+    speed limit of the vehicles.
+
+Initialization:
+    The vehicles will be added from the end of the road to the beginning of the road, one by one. The speed of the vehicles is
+    randomly generated in the range of [0.8*v_limit, v_limit].  The distance between the current vehicle and the preceding vehicle
+    delta_x should meet the following constraint: delta_x > k * ((delta_v ** 2) / (2 * a) + d). If the constraint is not satisfied, the
+    possibility of adding a new vehicle is saturation_rate, the possibility of adding a fake new vehicle is 1 - saturation_rate.
+    A fake vehicle is not added to the road network, but the space is reserved in the initialization process.
+    The initialization process will be repeated until the space is not big enough to add a new vehicle.
+
+Running stage:
+    The system keeps scheduling the motion of all the vehicles in the road network preemptive_interval seconds beforehand.
+    When conflicts occur, the motion of the related vehicles will be adjusted to avoid conflicts. Only the motion in the adjustment time zone will be adjusted.
+    When the space from the end vehicle to the beginning of the lane is enough to add a new vehicle, the possibility
+    Adding a new vehicle to the road network is saturation_rate; the possibility of adding a fake new vehicle is 1-saturation_rate.
+    A fake vehicle is not added to the road network, but the space is reserved.
+
+    For any vehicle without a preceding vehicle, the vehicle will accelerate or decelerate to the desired speed, until
+    leave the lane at the end.
+
+
+
+The strategy of the following vehicle:
+
+    Calculation of the Following Vehicle's Motion (cal_following function)
+    Initial State: The initial position (x_f[0]) and velocity (v_f[0]) of the following vehicle are set.
+    Synchronization: The while loop ensures that the following vehicle's calculation waits for the preceding vehicle's calculation to reach the current time step.
+    Distance and Speed Difference Calculation: Calculate the distance (delta_x) and speed difference (delta_v) between the two vehicles.
+    Acceleration Decision - Different Phases:
+    Free Acceleration Phase: If the distance between the two vehicles is greater than the safety distance and the following vehicle's speed is below the speed limit and the speed of the preceding vehicle plus the allowed speed difference, the following vehicle accelerates with a maximum acceleration of min(a_max, 3.0).
+    Overspeed Following Phase: If the following vehicle's speed reaches the speed limit or the speed of the preceding vehicle plus the allowed speed difference, and the distance between the two vehicles is greater than the safety distance, the acceleration is adjusted based on the preceding vehicle's acceleration.
+    Tightly Constrained Tracking Phase: If the distance between the two vehicles is less than or equal to the safety distance and the following vehicle's speed is greater than or equal to the preceding vehicle's speed, the following vehicle decelerates to maintain a safe distance.
+    Speed Synchronization Phase: If the speed difference between the two vehicles is zero, the following vehicle matches the preceding vehicle's acceleration.
+    State Update: After determining the acceleration, the velocity and position of the following vehicle are updated using the equations of motion.
+
+
+
+    Python code=>
+    def cal_following():
+    global i
+    # Initial state of the following vehicle
+    x_f[0] = -10.0
+    v_f[0] = 18.0
+
+    # Simulation process
+    for i in range(1, num_steps):
+        while idx < i - 1:
+            time.sleep(0.001)
+        delta_x = x_p[i - 1] - x_f[i - 1]
+        delta_v = v_f[i - 1] - v_p[i - 1]
+        a = a_p[i - 1] + a_d
+
+        # Free acceleration phase
+        if delta_x > k * ((delta_v ** 2) / (2 * a) + d) and v_f[i - 1] < min(v_limit, v_p[i - 1] + delta_v_margin):
+            a_f[i] = min(a_max, 3.0)  # Assume the engine allows a maximum acceleration of 3.0 m/s^2
+        # Overspeed following phase
+        elif v_f[i - 1] == min(v_limit, v_p[i - 1] + delta_v_margin) and delta_x > (delta_v ** 2) / (2 * a) + d:
+            # (v_p[i - 1] + delta_v_margin) - v_f[i - 1])/1.0, The acceleration required to correct the speed difference
+            # with the vehicle ahead in one second.
+            if a_p[i - 1] > 0:
+                a_f[i] = min(min(a_max, 3.0), min(v_limit, v_p[i - 1] + delta_v_margin) - v_f[i - 1] + a_p[i - 1])
+            else:
+                a_f[i] = 0
+        # Tightly constrained tracking phase
+        elif delta_x <= k * ((delta_v ** 2) / (2 * a) + d) and v_f[i - 1] >= v_p[i - 1]:
+            a_f[i] = a_p[i - 1] - a
+            if a_f[i] < -a_d:
+                a_f[i] = -a_d
+            elif a_f[i] > a_d:
+                a_f[i] = a_d
+        # Speed synchronization phase
+        elif delta_v == 0:
+            a_f[i] = a_p[i - 1]
+
+        # Update the state of the following vehicle
+        v_f[i] = v_f[i - 1] + a_f[i] * dt
+        x_f[i] = x_f[i - 1] + v_f[i - 1] * dt + 0.5 * a_f[i] * (dt ** 2)
+
+
+
+
+
+
